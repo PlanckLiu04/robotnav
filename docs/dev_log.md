@@ -212,3 +212,223 @@ project.md：完整项目规划
 请先阅读 README.md、CHANGELOG.md、docs/dev_log.md、project.md 和 robot_path_planning/main.py。
 然后总结当前项目状态，并带我小步推进 Week 2 任务。
 ```
+
+## Week 2 - 2026-06-27
+
+### 本周目标
+
+Week 2 的重点有两个：
+
+1. 项目模块化：把 Week 1 的单文件原型拆成更清晰的功能模块。
+2. 交互 UI 界面：在 Pygame 窗口中增加右侧控制面板，让用户可以通过按钮操作项目。
+
+### 模块化设计
+
+当前采用的项目结构：
+
+```text
+robot_path_planning/
+├── __init__.py
+├── config.py
+├── main.py
+├── core/
+│   ├── __init__.py
+│   ├── app_state.py
+│   └── grid_map.py
+├── planning/
+│   ├── __init__.py
+│   ├── astar.py
+│   └── bfs.py
+├── rendering/
+│   ├── __init__.py
+│   └── renderer.py
+└── ui/
+    ├── __init__.py
+    └── panel.py
+```
+
+各模块职责：
+
+```text
+config.py：
+    保存窗口尺寸、网格尺寸、颜色、FPS 等配置。
+
+core/grid_map.py：
+    保存地图数据，包括障碍物、起点、终点。
+    负责判断格子是否合法、是否可通行、获取上下左右邻居。
+
+core/app_state.py：
+    保存应用交互状态，包括当前编辑模式、路径、访问节点和状态文字。
+
+planning/bfs.py：
+    保存 BFS 路径规划算法。
+    输入 GridMap、start、goal，输出 SearchResult。
+
+planning/astar.py：
+    保存 A* 路径规划算法。
+    使用曼哈顿距离作为启发函数。
+
+rendering/renderer.py：
+    负责绘制启动主界面、网格、障碍物、起点、终点、路径、访问过的节点、机器人和轨迹。
+
+ui/panel.py：
+    负责绘制启动主界面、右侧 UI 面板、按钮、算法选择、状态信息和统计信息。
+
+ui/fonts.py：
+    负责跨平台字体匹配。
+    优先使用 macOS、Windows、Linux 常见清晰字体，找不到时回退到 Pygame 默认字体。
+
+main.py：
+    负责程序入口、Pygame 初始化、事件分发、调用算法、记录统计、更新机器人模拟和调用渲染。
+```
+
+这样拆分后，后续扩展会更清楚：
+
+```text
+新增 A*：
+    添加 planning/astar.py
+    在 main.py 或后续 planner registry 中调用。
+
+新增机器人：
+    添加 core/robot.py
+    添加 rendering/draw_robot.py 或扩展 renderer.py。
+
+新增 PID：
+    添加 control/pid.py
+    添加 control/path_tracker.py。
+
+新增算法统计：
+    扩展 SearchResult，加入 visited_count、path_length、elapsed_ms。
+```
+
+### UI 界面设计
+
+本周先使用 Pygame 内置绘制能力实现右侧交互面板，不引入额外 GUI 框架。
+
+原因：
+
+- 当前项目已经使用 Pygame，继续使用同一技术栈更容易理解。
+- 右侧面板足够支持按钮、状态、图例和后续算法选择。
+- 后续如果界面需求变复杂，再考虑单独 GUI 框架也不迟。
+
+### UI 清晰度优化
+
+运行界面文字曾出现偏糊、偏挤的问题。当前采用的解决方案：
+
+```text
+1. 右侧面板从 260px 加宽到 320px。
+2. 窗口调整为 1160 x 780，降低被桌面菜单栏或 Dock 遮挡的概率，同时给底部信息区留出空间。
+3. 地图区为 840 x 780，刚好对应 28 列 x 26 行的 30px 网格。
+4. 新增 ui/fonts.py，使用跨平台字体候选列表。
+5. 运行界面字体调整为更紧凑但清晰的字号。
+6. 编辑模式和寻路算法改为浮层下拉选择，减少按钮数量。
+7. 主界面删去大段说明，只保留简短过渡引导。
+8. 状态消息最多显示两行，超出后截断，避免遮挡底部信息栏。
+```
+
+字体候选优先级：
+
+```text
+PingFang SC：macOS 中文
+Microsoft YaHei / SimHei：Windows 中文
+Noto Sans CJK / WenQuanYi Micro Hei：Linux 中文
+Arial / Helvetica / DejaVu Sans：通用回退
+```
+
+这样做的好处是：不需要把字体文件放进项目，也能在 macOS、Windows、Linux 上尽量使用本机清晰字体。
+
+当前 UI 包含：
+
+```text
+Start Lab [Enter]：从启动主界面进入运行界面
+Edit Mode：下拉选择 Obstacle / Start / Goal
+Path Planner：下拉选择 BFS / A*
+Run Planner [Space]：执行当前算法
+Start Robot [S]：让机器人沿当前路径移动
+Random Map [R]：随机生成障碍物、起点和终点
+Clear [C]：清空地图和搜索结果
+Home [H]：返回启动主界面
+```
+
+状态区域显示：
+
+```text
+当前模式
+当前算法
+障碍物数量
+起点和终点状态
+算法运行时间
+访问节点数
+路径长度
+机器人模拟状态
+状态消息
+```
+
+颜色图例显示：
+
+```text
+Start：绿色
+Goal：红色
+Path：蓝色
+Visited：浅蓝色
+Wall：深色
+```
+
+### 行为变化
+
+相比 Week 1，本周新增或调整了这些行为：
+
+- 修改障碍物、起点或终点后，会自动清空旧路径和访问节点。
+- 障碍物模式支持按住鼠标拖动连续编辑：
+  - 从空白格开始拖动，会连续添加障碍物。
+  - 从障碍物开始拖动，会连续擦除障碍物。
+- 按 `R` 或点击 `Random` 可以随机生成障碍物、起点和终点。
+- 按 `Tab` 或点击算法按钮可以切换 BFS / A*。
+- 按 `Space` 或点击 `Run Planner` 会执行当前选择的算法。
+- 搜索完成后会记录运行时间、访问节点数和路径长度。
+- 按 `S` 或点击 `Start Robot` 可以让机器人沿规划路径移动。
+- 按 `C` 或点击 `Clear` 可以清空地图。
+- 如果没有设置起点和终点就运行搜索，会显示提示。
+- 如果 BFS 找不到路径，会显示 `No path found`。
+- BFS 运行后会显示访问过的节点，为后续搜索动画做准备。
+
+### 当前验证
+
+已运行：
+
+```bash
+PYTHONPYCACHEPREFIX=.pycache python3 -m compileall robot_path_planning
+```
+
+验证结果：
+
+```text
+所有 Python 模块编译通过。
+```
+
+第一次直接运行 `python3 -m compileall robot_path_planning` 时，macOS Python 尝试把缓存写入 `~/Library/Caches`，受当前沙箱限制失败。后来通过 `PYTHONPYCACHEPREFIX=.pycache` 把缓存写入项目目录，检查通过。已将 `.pycache/` 加入 `.gitignore`。
+
+### Week 2 总结
+
+本周完成了 RobotNav 从单文件原型到模块化交互平台的升级：
+
+```text
+单文件 main.py
+→ core / planning / rendering / ui 分层
+→ BFS 与 A* 双算法
+→ 右侧运行控制面板
+→ 随机地图和拖动编辑
+→ 运行时间、访问节点数、路径长度统计
+→ 基础机器人路径跟随动画
+```
+
+当前项目已经适合进入 Week 3：继续增强搜索过程动画、算法对比和机器人控制。
+
+### Week 3 建议
+
+1. 把 BFS 访问节点从一次性显示改成逐帧动画。
+2. 把 A* 访问节点也做成逐帧动画。
+3. 增加算法对比历史表，记录多次 BFS / A* 运行结果。
+4. 可选：增加“生成可通行随机地图”，确保随机地图至少存在一条路径。
+5. 把机器人圆点升级为有朝向的三角形模型。
+6. 加入 PID heading controller，让机器人转向更接近真实控制。

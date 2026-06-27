@@ -1,168 +1,306 @@
+"""RobotNav application entry point."""
+
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+import time
+
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 import pygame
-from collections import deque
 
-pygame.init()
-
-WIDTH, HEIGHT = 900, 600
-CELL_SIZE = 30
-
-ROWS = HEIGHT // CELL_SIZE  # 行 row
-COLS = WIDTH // CELL_SIZE  # 列 column
-
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("2D Robot Path Planning Simulator")
-
-clock = pygame.time.Clock()
-running = True
-
-obstacles = set()
-start = None
-goal = None
-path = []
-
-mode = "obstacle"
+from robot_path_planning import config
+from robot_path_planning.core.app_state import AlgorithmStats, AppState, EditMode, ScreenMode
+from robot_path_planning.core.grid_map import GridMap
+from robot_path_planning.planning.astar import astar
+from robot_path_planning.planning.bfs import bfs
+from robot_path_planning.rendering.renderer import Renderer
+from robot_path_planning.ui.panel import SidePanel
 
 
-def draw_grid():
-    for x in range(0, WIDTH, CELL_SIZE):
-        pygame.draw.line(screen, (210, 210, 210), (x, 0), (x, HEIGHT))
+def main() -> None:
+    pygame.init()
 
-    for y in range(0, HEIGHT, CELL_SIZE):
-        pygame.draw.line(screen, (210, 210, 210), (0, y), (WIDTH, y))
+    screen = pygame.display.set_mode((config.WINDOW_WIDTH, config.WINDOW_HEIGHT))
+    pygame.display.set_caption(config.TITLE)
+    clock = pygame.time.Clock()
+
+    grid_map = GridMap()
+    state = AppState()
+    panel = SidePanel()
+    renderer = Renderer(screen, panel)
+    drag_action: bool | None = None
+    last_drag_cell = None
+
+    running = True
+    while running:
+        pygame.display.set_caption(_build_window_title(state))
+        dt = clock.tick(config.FPS) / 1000.0
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.KEYDOWN:
+                _handle_keydown(event.key, grid_map, state)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                drag_action, last_drag_cell = _handle_mouse_down(event.pos, grid_map, state, panel)
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                drag_action = None
+                last_drag_cell = None
+            elif event.type == pygame.MOUSEMOTION and drag_action is not None:
+                last_drag_cell = _handle_mouse_drag(
+                    event.pos,
+                    drag_action,
+                    last_drag_cell,
+                    grid_map,
+                    state,
+                )
+
+        _update_robot(state, dt)
+        renderer.draw(grid_map, state)
+        pygame.display.flip()
+
+    pygame.quit()
 
 
-def draw_cell(cell, color):
-    row, col = cell
+def _handle_keydown(key: int, grid_map: GridMap, state: AppState) -> None:
+    if state.screen == ScreenMode.HOME:
+        if key in (pygame.K_RETURN, pygame.K_SPACE):
+            state.enter_run_screen()
+        return
 
-    rect = pygame.Rect(
-        col * CELL_SIZE,
-        row * CELL_SIZE,
-        CELL_SIZE,
-        CELL_SIZE
+    if key == pygame.K_1:
+        state.set_mode(EditMode.OBSTACLE)
+    elif key == pygame.K_2:
+        state.set_mode(EditMode.START)
+    elif key == pygame.K_3:
+        state.set_mode(EditMode.GOAL)
+    elif key == pygame.K_SPACE:
+        _run_search(grid_map, state)
+    elif key == pygame.K_c:
+        _clear_all(grid_map, state)
+    elif key == pygame.K_r:
+        _generate_random_map(grid_map, state)
+    elif key == pygame.K_TAB:
+        _toggle_algorithm(state)
+    elif key == pygame.K_s:
+        _start_robot(state)
+    elif key == pygame.K_h:
+        state.enter_home_screen()
+
+
+def _handle_mouse_down(
+    position: tuple[int, int],
+    grid_map: GridMap,
+    state: AppState,
+    panel: SidePanel,
+) -> tuple[bool | None, tuple[int, int] | None]:
+    if state.screen == ScreenMode.HOME:
+        _handle_home_action(panel.handle_click(position), state)
+        return None, None
+
+    if position[0] >= config.GRID_WIDTH:
+        _handle_panel_action(panel.handle_click(position, state), grid_map, state)
+        return None, None
+
+    state.close_menus()
+
+    cell = grid_map.pixel_to_cell(position)
+    if cell is None:
+        return None, None
+
+    if state.mode == EditMode.OBSTACLE:
+        drag_action = cell not in grid_map.obstacles
+        _edit_obstacle_cell(cell, drag_action, grid_map, state)
+        return drag_action, cell
+
+    changed = False
+    if state.mode == EditMode.START:
+        changed = grid_map.set_start(cell)
+    elif state.mode == EditMode.GOAL:
+        changed = grid_map.set_goal(cell)
+
+    if changed:
+        state.clear_search()
+        state.status = "Map changed. Search result cleared."
+    else:
+        state.status = "That cell cannot be changed in this mode."
+    return None, None
+
+
+def _handle_mouse_drag(
+    position: tuple[int, int],
+    drag_action: bool,
+    last_drag_cell: tuple[int, int] | None,
+    grid_map: GridMap,
+    state: AppState,
+) -> tuple[int, int] | None:
+    if position[0] >= config.GRID_WIDTH:
+        return last_drag_cell
+
+    cell = grid_map.pixel_to_cell(position)
+    if cell is None or cell == last_drag_cell:
+        return last_drag_cell
+
+    _edit_obstacle_cell(cell, drag_action, grid_map, state)
+    return cell
+
+
+def _edit_obstacle_cell(
+    cell: tuple[int, int],
+    blocked: bool,
+    grid_map: GridMap,
+    state: AppState,
+) -> None:
+    changed = grid_map.set_obstacle(cell, blocked)
+    if changed:
+        state.clear_search()
+        action = "added" if blocked else "removed"
+        state.status = f"Obstacle {action}. Search result cleared."
+
+
+def _handle_panel_action(action: str | None, grid_map: GridMap, state: AppState) -> None:
+    if action == "toggle_edit_menu":
+        state.edit_menu_open = not state.edit_menu_open
+        state.algorithm_menu_open = False
+    elif action == "toggle_algorithm_menu":
+        state.algorithm_menu_open = not state.algorithm_menu_open
+        state.edit_menu_open = False
+    elif action == "close_menus":
+        state.close_menus()
+    elif action == "mode_obstacle":
+        state.set_mode(EditMode.OBSTACLE)
+    elif action == "mode_start":
+        state.set_mode(EditMode.START)
+    elif action == "mode_goal":
+        state.set_mode(EditMode.GOAL)
+    elif action == "select_bfs":
+        _select_algorithm(state, "BFS")
+    elif action == "select_astar":
+        _select_algorithm(state, "A*")
+    elif action == "run_search":
+        _run_search(grid_map, state)
+    elif action == "start_robot":
+        _start_robot(state)
+    elif action == "random_map":
+        _generate_random_map(grid_map, state)
+    elif action == "clear":
+        _clear_all(grid_map, state)
+    elif action == "home":
+        state.enter_home_screen()
+
+
+def _handle_home_action(action: str | None, state: AppState) -> None:
+    if action == "enter_run":
+        state.enter_run_screen()
+
+
+def _run_search(grid_map: GridMap, state: AppState) -> None:
+    if grid_map.start is None or grid_map.goal is None:
+        state.clear_search()
+        state.status = "Set both start and goal before searching."
+        return
+
+    started_at = time.perf_counter()
+    planner = astar if state.selected_algorithm == "A*" else bfs
+    result = planner(grid_map, grid_map.start, grid_map.goal)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+
+    state.path = result.path
+    state.visited = result.visited
+    state.stats = AlgorithmStats(
+        name=state.selected_algorithm,
+        elapsed_ms=elapsed_ms,
+        visited_count=len(result.visited),
+        path_length=max(len(result.path) - 1, 0),
+        found=result.found,
     )
+    state.robot.reset()
+    if result.found:
+        steps = len(result.path) - 1
+        state.status = f"{state.selected_algorithm} found a path with {steps} steps."
+    else:
+        state.status = f"{state.selected_algorithm}: no path found."
 
-    pygame.draw.rect(screen, color, rect)
+
+def _clear_all(grid_map: GridMap, state: AppState) -> None:
+    grid_map.clear()
+    state.clear_search()
+    state.status = "Map cleared."
 
 
-def draw_obstacles():
-    for cell in obstacles:
-        draw_cell(cell, (40, 40, 40))
+def _generate_random_map(grid_map: GridMap, state: AppState) -> None:
+    grid_map.generate_random(config.RANDOM_OBSTACLE_DENSITY)
+    state.clear_search()
+    obstacle_count = len(grid_map.obstacles)
+    state.status = f"Random map generated with {obstacle_count} obstacles."
 
 
-def get_neighbors(cell):
+def _select_algorithm(state: AppState, name: str) -> None:
+    state.select_algorithm(name)
+    state.clear_search()
+
+
+def _toggle_algorithm(state: AppState) -> None:
+    next_algorithm = "A*" if state.selected_algorithm == "BFS" else "BFS"
+    _select_algorithm(state, next_algorithm)
+
+
+def _start_robot(state: AppState) -> None:
+    if len(state.path) < 2:
+        state.status = "Run a planner before starting the robot."
+        return
+
+    first_cell = state.path[0]
+    state.robot.reset()
+    state.robot.active = True
+    state.robot.position = _cell_center(first_cell)
+    state.robot.trail.append(state.robot.position)
+    state.status = "Robot simulation running."
+
+
+def _update_robot(state: AppState, dt: float) -> None:
+    robot = state.robot
+    if not robot.active or len(state.path) < 2:
+        return
+
+    robot.progress += config.ROBOT_SPEED_CELLS_PER_SECOND * dt
+    while robot.progress >= 1.0 and robot.path_index < len(state.path) - 2:
+        robot.progress -= 1.0
+        robot.path_index += 1
+
+    if robot.path_index >= len(state.path) - 2 and robot.progress >= 1.0:
+        robot.progress = 1.0
+        robot.active = False
+        robot.finished = True
+        state.status = "Robot reached the goal."
+
+    start = _cell_center(state.path[robot.path_index])
+    end = _cell_center(state.path[robot.path_index + 1])
+    row = start[0] + (end[0] - start[0]) * robot.progress
+    col = start[1] + (end[1] - start[1]) * robot.progress
+    robot.position = (row, col)
+
+    if not robot.trail or _distance(robot.trail[-1], robot.position) >= 0.2:
+        robot.trail.append(robot.position)
+
+
+def _cell_center(cell: tuple[int, int]) -> tuple[float, float]:
     row, col = cell
-
-    neighbors = [
-        (row - 1, col),
-        (row + 1, col),
-        (row, col - 1),
-        (row, col + 1)
-    ]
-
-    valid_neighbors = []
-
-    for neighbor in neighbors:
-        n_row, n_col = neighbor
-
-        inside_grid = 0 <= n_row < ROWS and 0 <= n_col < COLS
-        not_obstacle = neighbor not in obstacles
-
-        if inside_grid and not_obstacle:
-            valid_neighbors.append(neighbor)
-
-    return valid_neighbors
+    return row + 0.5, col + 0.5
 
 
-def bfs(start, goal):
-    queue = deque()
-    queue.append(start)
-
-    visited = set()
-    visited.add(start)
-
-    parent = {}
-
-    while queue:
-        current = queue.popleft()
-
-        if current == goal:
-            result_path = []
-            while current != start:
-                result_path.append(current)
-                current = parent[current]
-
-            result_path.append(start)
-            result_path.reverse()
-            return result_path
-
-        for neighbor in get_neighbors(current):
-            if neighbor not in visited:
-                visited.add(neighbor)
-                parent[neighbor] = current
-                queue.append(neighbor)
-
-    return []
+def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
 
 
-while running:
-    pygame.display.set_caption(
-        f"Mode: {mode} | 1: obstacle  2: start  3: goal  SPACE: find path"
-    )
+def _build_window_title(state: AppState) -> str:
+    if state.screen == ScreenMode.HOME:
+        return f"{config.TITLE} | Home"
+    return f"{config.TITLE} | Mode: {state.mode.value} | {state.status}"
 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
 
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_1:
-                mode = "obstacle"
-            elif event.key == pygame.K_2:
-                mode = "start"
-            elif event.key == pygame.K_3:
-                mode = "goal"
-            elif event.key == pygame.K_SPACE:
-                if start is not None and goal is not None:
-                    path = bfs(start, goal)
-
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            mouse_x, mouse_y = pygame.mouse.get_pos()
-            col = mouse_x // CELL_SIZE
-            row = mouse_y // CELL_SIZE
-            cell = (row, col)
-
-            path = []
-
-            if mode == "obstacle":
-                if cell != start and cell != goal:
-                    if cell in obstacles:
-                        obstacles.remove(cell)
-                    else:
-                        obstacles.add(cell)
-
-            elif mode == "start":
-                if cell not in obstacles and cell != goal:
-                    start = cell
-
-            elif mode == "goal":
-                if cell not in obstacles and cell != start:
-                    goal = cell
-
-    screen.fill((245, 245, 245))
-
-    for cell in path:
-        draw_cell(cell, (80, 160, 255))
-
-    draw_obstacles()
-
-    if start is not None:
-        draw_cell(start, (0, 180, 90))
-
-    if goal is not None:
-        draw_cell(goal, (220, 60, 60))
-
-    draw_grid()
-
-    pygame.display.flip()
-    clock.tick(60)
-
-pygame.quit()
+if __name__ == "__main__":
+    main()
