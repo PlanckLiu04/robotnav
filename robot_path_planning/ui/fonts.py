@@ -8,14 +8,18 @@ import pygame
 
 
 FONT_CANDIDATES = [
+    "SF Pro Text",
+    "SF Pro Display",
+    ".AppleSystemUIFont",
+    "Helvetica Neue",
     "PingFang SC",
     "Microsoft YaHei",
     "SimHei",
     "Noto Sans CJK SC",
     "Noto Sans CJK",
     "WenQuanYi Micro Hei",
-    "Arial",
     "Helvetica",
+    "Arial",
     "DejaVu Sans",
 ]
 

@@ -1,4 +1,4 @@
-"""A* path planner."""
+"""Greedy best-first search path planner."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ from robot_path_planning.core.grid_map import Cell, GridMap
 from robot_path_planning.planning.bfs import SearchResult, reconstruct_path
 
 
-def astar(grid_map: GridMap, start: Cell, goal: Cell) -> SearchResult:
+def greedy_best_first(grid_map: GridMap, start: Cell, goal: Cell) -> SearchResult:
     open_set: list[tuple[int, int, Cell]] = []
-    heapq.heappush(open_set, (0, 0, start))
+    heapq.heappush(open_set, (_manhattan(start, goal), 0, start))
 
     visited: set[Cell] = set()
     visited_order: list[Cell] = []
     parent: dict[Cell, Cell] = {}
-    g_score: dict[Cell, int] = {start: 0}
+    queued: set[Cell] = {start}
     sequence = 0
 
     while open_set:
@@ -25,6 +25,7 @@ def astar(grid_map: GridMap, start: Cell, goal: Cell) -> SearchResult:
 
         visited.add(current)
         visited_order.append(current)
+
         if current == goal:
             return SearchResult(
                 path=reconstruct_path(parent, start, goal),
@@ -33,13 +34,11 @@ def astar(grid_map: GridMap, start: Cell, goal: Cell) -> SearchResult:
             )
 
         for neighbor in grid_map.neighbors(current):
-            tentative_g = g_score[current] + 1
-            if tentative_g < g_score.get(neighbor, 1_000_000):
+            if neighbor not in visited and neighbor not in queued:
                 parent[neighbor] = current
-                g_score[neighbor] = tentative_g
+                queued.add(neighbor)
                 sequence += 1
-                f_score = tentative_g + _manhattan(neighbor, goal)
-                heapq.heappush(open_set, (f_score, sequence, neighbor))
+                heapq.heappush(open_set, (_manhattan(neighbor, goal), sequence, neighbor))
 
     return SearchResult(path=[], visited=visited, visited_order=visited_order)
 

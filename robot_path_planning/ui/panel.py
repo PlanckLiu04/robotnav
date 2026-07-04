@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pygame
 
 from robot_path_planning import config
-from robot_path_planning.core.app_state import AppState, EditMode
+from robot_path_planning.core.app_state import AppState, EditMode, PlannerHistoryEntry
 from robot_path_planning.core.grid_map import GridMap
 from robot_path_planning.ui.fonts import get_font
 
@@ -44,12 +44,13 @@ class SidePanel:
         self.x = config.GRID_WIDTH
         self.width = config.PANEL_WIDTH
         self.margin = 22
-        self.font = get_font(22)
-        self.small_font = get_font(20)
-        self.tiny_font = get_font(18)
-        self.title_font = get_font(32, bold=True)
-        self.hero_font = get_font(58, bold=True)
-        self.line_height = 21
+        self.font = get_font(20)
+        self.small_font = get_font(17)
+        self.tiny_font = get_font(15)
+        self.title_font = get_font(30, bold=True)
+        self.hero_font = get_font(54, bold=True)
+        self.line_height = 19
+        self._mouse_position = (0, 0)
         self.home_buttons = self._create_home_buttons()
         self.buttons = self._create_run_buttons()
 
@@ -67,28 +68,40 @@ class SidePanel:
         left = self.x + self.margin
         width = self.width - self.margin * 2
         half_width = (width - 10) // 2
-        height = 34
+        height = 32
 
         return [
-            Button(pygame.Rect(left, 246, width, height), "Run Planner", "run_search", "Space"),
-            Button(pygame.Rect(left, 288, width, height), "Start Robot", "start_robot", "S"),
-            Button(pygame.Rect(left, 342, width, height), "Random Map", "random_map", "R"),
-            Button(pygame.Rect(left, 384, half_width, height), "Clear", "clear", "C"),
-            Button(pygame.Rect(left + half_width + 10, 384, half_width, height), "Home", "home", "H"),
+            Button(pygame.Rect(left, 174, width, height), "Run Planner", "run_search", "Space"),
+            Button(pygame.Rect(left, 212, width, height), "Start Robot", "start_robot", "S"),
+            Button(pygame.Rect(left, 258, width, height), "Random Map", "random_map", "R"),
+            Button(pygame.Rect(left, 296, half_width, height), "Clear", "clear", "C"),
+            Button(pygame.Rect(left + half_width + 10, 296, half_width, height), "Home", "home", "H"),
         ]
 
     def handle_click(self, position: tuple[int, int], state: AppState | None = None) -> str | None:
         if state is not None:
-            action = self._handle_select_click(position, state)
+            content_position = self._to_content_position(position, state)
+            action = self._handle_select_click(content_position, state)
+            if action is not None:
+                return action
+            action = self._handle_history_click(content_position, state)
             if action is not None:
                 return action
 
-        for button in self.home_buttons + self.buttons:
-            if button.contains(position):
+        buttons = self.home_buttons if state is None else self.buttons
+        test_position = position if state is None else self._to_content_position(position, state)
+        for button in buttons:
+            if button.contains(test_position):
                 return button.action
         return "close_menus" if state is not None else None
 
+    def handle_scroll(self, amount: int, state: AppState) -> None:
+        content_height = self._content_height(state)
+        max_scroll = max(0, content_height - config.WINDOW_HEIGHT)
+        state.panel_scroll_y = _clamp(state.panel_scroll_y - amount * 44, 0, max_scroll)
+
     def draw_home(self, screen: pygame.Surface) -> None:
+        self._mouse_position = pygame.mouse.get_pos()
         screen.fill((232, 238, 246))
         self._draw_home_grid_preview(screen)
         self._draw_text(screen, "RobotNav", self.hero_font, (72, 116), config.COLOR_DARK_TEXT)
@@ -102,19 +115,28 @@ class SidePanel:
         self._draw_home_buttons(screen)
 
     def draw(self, screen: pygame.Surface, grid_map: GridMap, state: AppState) -> None:
-        panel_rect = pygame.Rect(self.x, 0, self.width, config.WINDOW_HEIGHT)
-        pygame.draw.rect(screen, config.COLOR_PANEL, panel_rect)
-        pygame.draw.line(screen, config.COLOR_PANEL_BORDER, (self.x, 0), (self.x, config.WINDOW_HEIGHT), 2)
+        content_height = self._content_height(state)
+        max_scroll = max(0, content_height - config.WINDOW_HEIGHT)
+        state.panel_scroll_y = _clamp(state.panel_scroll_y, 0, max_scroll)
+        self._mouse_position = self._to_content_position(pygame.mouse.get_pos(), state)
 
-        self._draw_title(screen)
-        self._draw_selects(screen, state)
-        self._draw_group_label(screen, "Actions", 222)
-        self._draw_buttons(screen)
-        self._draw_group_label(screen, "Results", 444)
-        self._draw_status(screen, grid_map, state)
-        self._draw_metrics(screen, state)
-        self._draw_simulation(screen, state)
-        self._draw_open_select_options(screen, state)
+        content = pygame.Surface((config.WINDOW_WIDTH, content_height))
+        content.fill(config.COLOR_PANEL)
+        pygame.draw.line(content, config.COLOR_PANEL_BORDER, (self.x, 0), (self.x, content_height), 2)
+
+        self._draw_selects(content, state)
+        self._draw_group_label(content, "Actions", 154)
+        self._draw_buttons(content)
+        self._draw_group_label(content, "Results", 360)
+        self._draw_status(content, grid_map, state)
+        self._draw_metrics(content, state)
+        self._draw_simulation(content, state)
+        self._draw_history(content, state)
+        self._draw_open_select_options(content, state)
+
+        source = pygame.Rect(self.x, state.panel_scroll_y, self.width, config.WINDOW_HEIGHT)
+        screen.blit(content, (self.x, 0), source)
+        self._draw_scrollbar(screen, state, content_height)
 
     def _handle_select_click(self, position: tuple[int, int], state: AppState) -> str | None:
         edit_select, algorithm_select = self._select_boxes(state)
@@ -134,12 +156,18 @@ class SidePanel:
 
         return None
 
+    def _handle_history_click(self, position: tuple[int, int], state: AppState) -> str | None:
+        for history_index, rect, _ in self._history_rows(state):
+            if rect.collidepoint(position):
+                return f"restore_history_{history_index}"
+        return None
+
     def _select_boxes(self, state: AppState) -> tuple[SelectBox, SelectBox]:
         left = self.x + self.margin
         width = self.width - self.margin * 2
-        height = 42
+        height = 38
         edit_select = SelectBox(
-            pygame.Rect(left, 104, width, height),
+            pygame.Rect(left, 36, width, height),
             "Edit Mode",
             _edit_mode_label(state.mode),
             "toggle_edit_menu",
@@ -151,13 +179,16 @@ class SidePanel:
             state.edit_menu_open,
         )
         algorithm_select = SelectBox(
-            pygame.Rect(left, 182, width, height),
+            pygame.Rect(left, 102, width, height),
             "Path Planner",
             state.selected_algorithm,
             "toggle_algorithm_menu",
             [
                 ("BFS", "select_bfs"),
                 ("A*", "select_astar"),
+                ("DFS", "select_dfs"),
+                ("Dijkstra", "select_dijkstra"),
+                ("Greedy", "select_greedy"),
             ],
             state.algorithm_menu_open,
         )
@@ -187,12 +218,12 @@ class SidePanel:
         pygame.draw.circle(screen, config.COLOR_ROBOT, (825, 328), 12)
 
     def _draw_home_buttons(self, screen: pygame.Surface) -> None:
-        mouse_pos = pygame.mouse.get_pos()
+        mouse_pos = self._mouse_position
         for button in self.home_buttons:
             color = config.COLOR_BUTTON_ACTIVE if button.contains(mouse_pos) else (37, 99, 235)
             pygame.draw.rect(screen, color, button.rect, border_radius=8)
             label = f"{button.label}  [{button.hotkey}]"
-            text = self.font.render(label, True, config.COLOR_TEXT)
+            text = self.font.render(label, True, (255, 255, 255))
             text_rect = text.get_rect(center=button.rect.center)
             screen.blit(text, text_rect)
 
@@ -215,9 +246,9 @@ class SidePanel:
         self._draw_text(screen, select.label, self.tiny_font, (select.rect.x, select.rect.y - 26), config.COLOR_TEXT_MUTED)
         pygame.draw.rect(screen, config.COLOR_BUTTON, select.rect, border_radius=6)
         pygame.draw.rect(screen, config.COLOR_PANEL_BORDER, select.rect, width=1, border_radius=6)
-        self._draw_text(screen, select.value, self.small_font, (select.rect.x + 14, select.rect.y + 9))
+        self._draw_text(screen, select.value, self.small_font, (select.rect.x + 14, select.rect.y + 8))
         arrow = "v" if not select.expanded else "^"
-        self._draw_text(screen, arrow, self.small_font, (select.rect.right - 28, select.rect.y + 9), config.COLOR_TEXT_MUTED)
+        self._draw_text(screen, arrow, self.small_font, (select.rect.right - 28, select.rect.y + 8), config.COLOR_TEXT_MUTED)
 
     def _draw_open_select_options(self, screen: pygame.Surface, state: AppState) -> None:
         for select in self._select_boxes(state):
@@ -230,14 +261,17 @@ class SidePanel:
                 self._draw_text(screen, label, self.small_font, (rect.x + 14, rect.y + 9))
 
     def _draw_buttons(self, screen: pygame.Surface) -> None:
-        mouse_pos = pygame.mouse.get_pos()
+        mouse_pos = self._mouse_position
 
         for button in self.buttons:
             color = config.COLOR_BUTTON_HOVER if button.contains(mouse_pos) else config.COLOR_BUTTON
+            text_color = config.COLOR_TEXT
             if button.action == "run_search":
                 color = config.COLOR_BUTTON_ACTIVE if not button.contains(mouse_pos) else (59, 130, 246)
+                text_color = (255, 255, 255)
             if button.action == "clear":
                 color = config.COLOR_DANGER if button.contains(mouse_pos) else config.COLOR_BUTTON
+                text_color = (255, 255, 255) if button.contains(mouse_pos) else config.COLOR_TEXT
 
             pygame.draw.rect(screen, color, button.rect, border_radius=6)
             pygame.draw.rect(screen, config.COLOR_PANEL_BORDER, button.rect, width=1, border_radius=6)
@@ -245,10 +279,10 @@ class SidePanel:
             label = button.label
             if button.hotkey:
                 label = f"{button.label}  [{button.hotkey}]"
-            self._draw_centered_text(screen, label, self.small_font, button.rect)
+            self._draw_centered_text(screen, label, self.small_font, button.rect, text_color)
 
     def _draw_status(self, screen: pygame.Surface, grid_map: GridMap, state: AppState) -> None:
-        top = 470
+        top = 384
         self._draw_section_header(screen, "Current State", top)
         lines = [
             f"Mode: {_edit_mode_label(state.mode)}",
@@ -259,7 +293,7 @@ class SidePanel:
         self._draw_lines(screen, lines, self.x + self.margin, top + 36, max_lines=4)
 
     def _draw_metrics(self, screen: pygame.Surface, state: AppState) -> None:
-        top = 470
+        top = 384
         x = self.x + self.margin + 148
         self._draw_section_header(screen, "Metrics", top, x=x, width=self.x + self.width - self.margin - x)
         stats = state.stats
@@ -272,11 +306,25 @@ class SidePanel:
         self._draw_lines(screen, lines, x, top + 36, max_lines=4, width=self.x + self.width - self.margin - x)
 
     def _draw_simulation(self, screen: pygame.Surface, state: AppState) -> None:
-        top = 620
+        top = 518
         self._draw_section_header(screen, "Simulation", top, width=self.width - self.margin * 2)
         status = "running" if state.robot.active else "finished" if state.robot.finished else "idle"
         self._draw_lines(screen, [f"Robot: {status}"], self.x + self.margin, top + 36, max_lines=1, width=self.width - self.margin * 2)
-        self._draw_message(screen, state.status, self.x + self.margin, top + 60, self.width - self.margin * 2, max_lines=2)
+        self._draw_message(screen, state.status, self.x + self.margin, top + 58, self.width - self.margin * 2, max_lines=2)
+
+    def _draw_history(self, screen: pygame.Surface, state: AppState) -> None:
+        top = 626
+        self._draw_section_header(screen, "Recent Runs", top, width=self.width - self.margin * 2)
+        if not state.planner_history:
+            self._draw_lines(screen, ["No planner runs yet."], self.x + self.margin, top + 38, max_lines=1, width=self.width - self.margin * 2)
+            return
+
+        mouse_pos = self._mouse_position
+        for _, rect, entry in self._history_rows(state):
+            color = (255, 255, 255) if not rect.collidepoint(mouse_pos) else (242, 242, 247)
+            pygame.draw.rect(screen, color, rect, border_radius=7)
+            pygame.draw.rect(screen, config.COLOR_PANEL_BORDER, rect, width=1, border_radius=7)
+            self._draw_text(screen, _format_history_entry(entry), self.tiny_font, (rect.x + 10, rect.y + 8), config.COLOR_TEXT)
 
     def _draw_group_label(self, screen: pygame.Surface, title: str, y: int) -> None:
         self._draw_text(screen, title, self.tiny_font, (self.x + self.margin, y), config.COLOR_TEXT_MUTED)
@@ -332,8 +380,49 @@ class SidePanel:
 
         return lines or [text]
 
-    def _draw_centered_text(self, screen: pygame.Surface, text: str, font: pygame.font.Font, rect: pygame.Rect) -> None:
-        surface = font.render(text, True, config.COLOR_TEXT)
+    def _history_rows(self, state: AppState) -> list[tuple[int, pygame.Rect, PlannerHistoryEntry]]:
+        left = self.x + self.margin
+        width = self.width - self.margin * 2
+        row_height = 31
+        top = 664
+        rows: list[tuple[int, pygame.Rect, PlannerHistoryEntry]] = []
+        latest_entries = list(enumerate(state.planner_history))
+        for display_index, (history_index, entry) in enumerate(reversed(latest_entries)):
+            rect = pygame.Rect(left, top + display_index * (row_height + 8), width, row_height)
+            rows.append((history_index, rect, entry))
+        return rows
+
+    def _content_height(self, state: AppState) -> int:
+        history_count = max(len(state.planner_history), 1)
+        history_bottom = 664 + history_count * 39 + self.margin
+        return max(config.WINDOW_HEIGHT, history_bottom)
+
+    def _to_content_position(self, position: tuple[int, int], state: AppState) -> tuple[int, int]:
+        x, y = position
+        return x, y + state.panel_scroll_y
+
+    def _draw_scrollbar(self, screen: pygame.Surface, state: AppState, content_height: int) -> None:
+        if content_height <= config.WINDOW_HEIGHT:
+            return
+
+        track_height = config.WINDOW_HEIGHT - 18
+        track = pygame.Rect(self.x + self.width - 7, 9, 3, track_height)
+        thumb_height = max(42, int(track_height * config.WINDOW_HEIGHT / content_height))
+        max_scroll = content_height - config.WINDOW_HEIGHT
+        thumb_y = track.y + int((track_height - thumb_height) * state.panel_scroll_y / max_scroll)
+        thumb = pygame.Rect(track.x, thumb_y, track.width, thumb_height)
+        pygame.draw.rect(screen, (218, 218, 222), track, border_radius=2)
+        pygame.draw.rect(screen, (142, 142, 147), thumb, border_radius=2)
+
+    def _draw_centered_text(
+        self,
+        screen: pygame.Surface,
+        text: str,
+        font: pygame.font.Font,
+        rect: pygame.Rect,
+        color: tuple[int, int, int] = config.COLOR_TEXT,
+    ) -> None:
+        surface = font.render(text, True, color)
         screen.blit(surface, surface.get_rect(center=rect.center))
 
     def _draw_text(
@@ -368,3 +457,15 @@ def _truncate_text(text: str, font: pygame.font.Font, max_width: int) -> str:
     while text and font.size(text + ellipsis)[0] > max_width:
         text = text[:-1]
     return text + ellipsis if text else ellipsis
+
+
+def _clamp(value: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(value, maximum))
+
+
+def _format_history_entry(entry: PlannerHistoryEntry) -> str:
+    result = "OK" if entry.found else "No"
+    return (
+        f"M{entry.map_id} {entry.name} {result} "
+        f"{entry.elapsed_ms:.1f}ms V{entry.visited_count} P{entry.path_length}"
+    )

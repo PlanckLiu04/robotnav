@@ -43,10 +43,27 @@
 - Added visited-node display after BFS search.
 - Updated README and development notes for the new modular structure.
 
+## Week 3 - 2026-07-04
+
+- Extended `SearchResult` with `visited_order` so planners can preserve the exact node visitation sequence.
+- Added step-by-step search animation for BFS, A*, DFS, Dijkstra, and Greedy Best-First Search.
+- Added `SearchAnimationState` to manage animation progress, final path reveal, and history recording after animation finishes.
+- Added planner run history with snapshots of obstacles, start, goal, visited cells, and final path.
+- Added clickable Recent Runs entries that restore the selected historical map and result on the left grid.
+- Added map identity numbering with `M1`, `M2`, etc., based on a map signature of obstacles, start, and goal.
+- Reused the same map ID when the same map appears again, instead of assigning a new ID every time.
+- Increased stored run history to 20 entries and made the right-side panel scrollable.
+- Refined the run-panel UI by removing extra titles, using a lighter macOS-style color palette, and tightening typography.
+- Reworked Recent Runs into compact horizontal entries for easier scanning and clicking.
+- Added DFS path planning in `planning/dfs.py`.
+- Added Dijkstra shortest-path planning in `planning/dijkstra.py`.
+- Added Greedy Best-First Search in `planning/greedy.py`.
+- Expanded the planner selector and `Tab` shortcut cycle to include BFS, A*, DFS, Dijkstra, and Greedy.
+- Verified the planner implementations with compile checks and a planner smoke test.
+
 ## Upcoming
 
-- Animate BFS search progress.
-- Add planner history for richer algorithm comparison.
-- Add a guaranteed-solvable random map generator.
+- Compare the five planners more systematically on the same map.
+- Optionally add a separate guaranteed-solvable random map generator while keeping ordinary random maps.
 - Improve robot rendering with heading triangle.
 - Add PID heading controller.

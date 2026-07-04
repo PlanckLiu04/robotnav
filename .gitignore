@@ -21,3 +21,7 @@ env/
 build/
 dist/
 *.egg-info/
+
+# Local learning and presentation notes
+docs/qa_log.md
+docs/week3_technical_support_notes.md

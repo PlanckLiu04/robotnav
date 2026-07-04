@@ -432,3 +432,210 @@ PYTHONPYCACHEPREFIX=.pycache python3 -m compileall robot_path_planning
 4. 可选：增加“生成可通行随机地图”，确保随机地图至少存在一条路径。
 5. 把机器人圆点升级为有朝向的三角形模型。
 6. 加入 PID heading controller，让机器人转向更接近真实控制。
+
+## Week 3 - 2026-07-04
+
+### 本周目标
+
+Week 3 的重点是把 RobotNav 从“运行一次、直接看到最终结果”的路径规划演示，升级为更适合观察算法过程和做算法对比的学习工具。
+
+本周围绕三条主线推进：
+
+```text
+搜索过程动画
+→ 多算法扩展
+→ 最近运行记录与地图复现
+```
+
+同时继续优化右侧 UI，让新增信息不会挤在固定高度里。
+
+### 搜索动画
+
+Week 2 中，BFS 只是在搜索结束后一次性显示所有访问节点。Week 3 增加了 `visited_order`，让每个算法都能记录节点被访问的先后顺序：
+
+```text
+visited：
+    set[Cell]，用于快速判断某个节点是否被访问过。
+
+visited_order：
+    list[Cell]，用于按顺序播放搜索动画。
+```
+
+当前搜索流程变为：
+
+```text
+1. 用户点击 Run Planner 或按 Space。
+2. main.py 调用当前选择的 planner。
+3. planner 一次性完成搜索，并返回 path、visited、visited_order。
+4. AppState.search_animation 保存 visited_order 和最终结果。
+5. 主循环每一帧调用 _update_search_animation()。
+6. 按 SEARCH_ANIMATION_CELLS_PER_SECOND 逐个 reveal 访问节点。
+7. 动画结束后显示最终 path，并把本次运行写入 Recent Runs。
+```
+
+这样实现的好处是：算法代码仍然保持简单，不需要先改成 generator；但 UI 已经能逐帧展示 BFS、A*、DFS、Dijkstra 和 Greedy 的搜索差异。
+
+相关代码：
+
+```text
+robot_path_planning/planning/bfs.py
+robot_path_planning/planning/astar.py
+robot_path_planning/planning/dfs.py
+robot_path_planning/planning/dijkstra.py
+robot_path_planning/planning/greedy.py
+robot_path_planning/core/app_state.py
+robot_path_planning/main.py
+```
+
+### 新增算法
+
+本周在 BFS 和 A* 基础上新增三个算法：
+
+```text
+DFS：
+    使用 stack 深度优先探索。
+    不保证最短路径，但适合观察“先往一个方向走到底”的搜索风格。
+
+Dijkstra：
+    使用优先队列，根据起点到当前节点的累计距离扩展。
+    在当前每一步代价都为 1 的网格里，路径长度通常与 BFS 一致。
+
+Greedy Best-First Search：
+    使用曼哈顿距离作为优先级。
+    更激进地靠近终点，访问节点可能更少，但不保证最短路径。
+```
+
+算法注册集中在 `main.py` 的 `PLANNERS` 字典中：
+
+```text
+BFS
+A*
+DFS
+Dijkstra
+Greedy
+```
+
+右侧 `Path Planner` 下拉框和 `Tab` 快捷键都会基于这组算法切换。
+
+### 运行历史与地图编号
+
+Week 3 增加了 Recent Runs。每次搜索动画结束后，程序会记录一条运行历史：
+
+```text
+地图编号 Mi
+算法名称
+是否找到路径
+运行时间
+访问节点数
+路径长度
+障碍物快照
+起点和终点
+visited 和 path
+```
+
+用户点击某条历史记录时，左侧地图会恢复到当时的障碍物、起点、终点、访问区域和最终路径。
+
+地图编号不是每次地图编辑就变化，而是“运行记录产生时”才确定。当前使用地图指纹：
+
+```text
+signature = (sorted(obstacles), start, goal)
+```
+
+如果这张地图之前出现过，就复用原来的 `Mi`；如果是第一次出现，就分配新的编号。
+
+这样可以避免“每次小改地图就跳号”，也能让同一张地图上的不同算法运行结果自然归到同一个 `Mi` 下。
+
+### UI 调整
+
+本周右侧面板做了几项调整：
+
+```text
+1. 删除运行界面顶部的 RobotNav / Run interface 标题，节省垂直空间。
+2. 使用更接近 macOS 的浅色背景、系统蓝强调色和柔和边框。
+3. 字体尺寸略微收紧，并优先匹配系统清晰字体。
+4. 右侧面板改为可滚动内容区。
+5. Recent Runs 每条记录使用小横条样式。
+6. 点击历史记录可以复现当时结果。
+```
+
+滚动实现思路：
+
+```text
+1. 先创建一个比窗口更高的 content Surface。
+2. 把右侧面板所有内容画到 content Surface 上。
+3. 根据 state.panel_scroll_y 截取其中一段 blit 到真实屏幕。
+4. 鼠标滚轮只在右侧面板区域内生效。
+5. 根据 content 高度和窗口高度绘制滚动条。
+```
+
+### 本周暂缓的功能
+
+“保证随机地图至少有一条路径”本周先暂缓，没有替换现有 `Random Map`。
+
+原因是当前普通随机地图也有学习价值：
+
+```text
+有路径：
+    可以观察不同算法如何搜索和找到路径。
+
+无路径：
+    可以观察算法如何扩散、如何确认不可达。
+```
+
+后续更合适的做法是新增一个独立按钮，例如 `Solvable Map`，通过重复生成随机地图并用 BFS 检查可达性来保证至少有路，同时保留当前可能无路的 `Random Map`。
+
+### 当前验证
+
+已完成以下验证：
+
+```bash
+PYTHONPYCACHEPREFIX=.pycache python3 -m compileall robot_path_planning
+```
+
+结果：
+
+```text
+所有 Python 模块编译通过。
+```
+
+并完成 planner smoke test：
+
+```text
+BFS：找到路径，路径长度与访问节点正常
+A*：找到路径，访问节点少于 BFS
+DFS：找到路径，但路径不一定最短
+Dijkstra：找到路径，路径长度与 BFS 一致
+Greedy：找到路径，访问节点较少但不保证最短
+```
+
+地图编号逻辑也已验证：
+
+```text
+同一张地图重复运行 → 复用同一个 M 编号
+新地图首次运行 → 分配新的 M 编号
+回到旧地图运行 → 继续复用旧编号
+```
+
+### Week 3 总结
+
+Week 3 完成后，RobotNav 已经从“双算法路径显示工具”升级为“五算法搜索过程可视化工具”：
+
+```text
+BFS / A* / DFS / Dijkstra / Greedy
+→ visited_order 搜索动画
+→ Recent Runs 历史记录
+→ M1 / M2 地图编号
+→ 点击历史记录复现运行结果
+→ 可滚动右侧控制面板
+```
+
+当前项目已经适合进入 Week 4：在现有五种算法基础上做更系统的对比，并开始推进机器人模型和 PID 控制。
+
+### Week 4 建议
+
+1. 设计同一地图上的算法对比视图或对比流程。
+2. 可选新增 `Solvable Map`，但保留普通 `Random Map`。
+3. 把机器人圆点升级为有朝向的三角形模型。
+4. 加入 PID heading controller。
+5. 增加暂停、继续、重置机器人模拟。
+6. 整理项目截图和演示材料。

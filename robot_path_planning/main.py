@@ -16,8 +16,19 @@ from robot_path_planning.core.app_state import AlgorithmStats, AppState, EditMod
 from robot_path_planning.core.grid_map import GridMap
 from robot_path_planning.planning.astar import astar
 from robot_path_planning.planning.bfs import bfs
+from robot_path_planning.planning.dfs import dfs
+from robot_path_planning.planning.dijkstra import dijkstra
+from robot_path_planning.planning.greedy import greedy_best_first
 from robot_path_planning.rendering.renderer import Renderer
 from robot_path_planning.ui.panel import SidePanel
+
+PLANNERS = {
+    "BFS": bfs,
+    "A*": astar,
+    "DFS": dfs,
+    "Dijkstra": dijkstra,
+    "Greedy": greedy_best_first,
+}
 
 
 def main() -> None:
@@ -44,6 +55,8 @@ def main() -> None:
                 running = False
             elif event.type == pygame.KEYDOWN:
                 _handle_keydown(event.key, grid_map, state)
+            elif event.type == pygame.MOUSEWHEEL:
+                _handle_mouse_wheel(event.y, state, panel)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 drag_action, last_drag_cell = _handle_mouse_down(event.pos, grid_map, state, panel)
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
@@ -58,6 +71,7 @@ def main() -> None:
                     state,
                 )
 
+        _update_search_animation(state, dt)
         _update_robot(state, dt)
         renderer.draw(grid_map, state)
         pygame.display.flip()
@@ -89,6 +103,15 @@ def _handle_keydown(key: int, grid_map: GridMap, state: AppState) -> None:
         _start_robot(state)
     elif key == pygame.K_h:
         state.enter_home_screen()
+
+
+def _handle_mouse_wheel(amount: int, state: AppState, panel: SidePanel) -> None:
+    if state.screen != ScreenMode.RUN:
+        return
+
+    mouse_x, _ = pygame.mouse.get_pos()
+    if mouse_x >= config.GRID_WIDTH:
+        panel.handle_scroll(amount, state)
 
 
 def _handle_mouse_down(
@@ -162,7 +185,12 @@ def _edit_obstacle_cell(
 
 
 def _handle_panel_action(action: str | None, grid_map: GridMap, state: AppState) -> None:
-    if action == "toggle_edit_menu":
+    if action is None:
+        return
+
+    if action.startswith("restore_history_"):
+        _restore_history(action, grid_map, state)
+    elif action == "toggle_edit_menu":
         state.edit_menu_open = not state.edit_menu_open
         state.algorithm_menu_open = False
     elif action == "toggle_algorithm_menu":
@@ -180,6 +208,12 @@ def _handle_panel_action(action: str | None, grid_map: GridMap, state: AppState)
         _select_algorithm(state, "BFS")
     elif action == "select_astar":
         _select_algorithm(state, "A*")
+    elif action == "select_dfs":
+        _select_algorithm(state, "DFS")
+    elif action == "select_dijkstra":
+        _select_algorithm(state, "Dijkstra")
+    elif action == "select_greedy":
+        _select_algorithm(state, "Greedy")
     elif action == "run_search":
         _run_search(grid_map, state)
     elif action == "start_robot":
@@ -197,6 +231,21 @@ def _handle_home_action(action: str | None, state: AppState) -> None:
         state.enter_run_screen()
 
 
+def _restore_history(action: str, grid_map: GridMap, state: AppState) -> None:
+    try:
+        history_index = int(action.removeprefix("restore_history_"))
+    except ValueError:
+        return
+
+    entry = state.restore_planner_history(history_index)
+    if entry is None:
+        return
+
+    grid_map.obstacles = set(entry.obstacles)
+    grid_map.start = entry.start
+    grid_map.goal = entry.goal
+
+
 def _run_search(grid_map: GridMap, state: AppState) -> None:
     if grid_map.start is None or grid_map.goal is None:
         state.clear_search()
@@ -204,12 +253,12 @@ def _run_search(grid_map: GridMap, state: AppState) -> None:
         return
 
     started_at = time.perf_counter()
-    planner = astar if state.selected_algorithm == "A*" else bfs
+    planner = PLANNERS.get(state.selected_algorithm, bfs)
     result = planner(grid_map, grid_map.start, grid_map.goal)
     elapsed_ms = (time.perf_counter() - started_at) * 1000.0
 
-    state.path = result.path
-    state.visited = result.visited
+    state.path = []
+    state.visited = set()
     state.stats = AlgorithmStats(
         name=state.selected_algorithm,
         elapsed_ms=elapsed_ms,
@@ -218,10 +267,25 @@ def _run_search(grid_map: GridMap, state: AppState) -> None:
         found=result.found,
     )
     state.robot.reset()
-    if result.found:
-        steps = len(result.path) - 1
-        state.status = f"{state.selected_algorithm} found a path with {steps} steps."
+
+    if result.visited_order:
+        state.search_animation.start(
+            result.visited_order,
+            result.path,
+            result.visited,
+            grid_map.obstacles,
+            grid_map.start,
+            grid_map.goal,
+        )
+        state.status = f"{state.selected_algorithm} search animation running."
+    elif result.found:
+        state.path = result.path
+        state.visited = result.visited
+        state.add_planner_history(grid_map.obstacles, grid_map.start, grid_map.goal)
+        state.status = f"{state.selected_algorithm} found a path with {state.stats.path_length} steps."
     else:
+        state.visited = result.visited
+        state.add_planner_history(grid_map.obstacles, grid_map.start, grid_map.goal)
         state.status = f"{state.selected_algorithm}: no path found."
 
 
@@ -244,11 +308,17 @@ def _select_algorithm(state: AppState, name: str) -> None:
 
 
 def _toggle_algorithm(state: AppState) -> None:
-    next_algorithm = "A*" if state.selected_algorithm == "BFS" else "BFS"
+    algorithms = list(PLANNERS)
+    current_index = algorithms.index(state.selected_algorithm) if state.selected_algorithm in algorithms else 0
+    next_algorithm = algorithms[(current_index + 1) % len(algorithms)]
     _select_algorithm(state, next_algorithm)
 
 
 def _start_robot(state: AppState) -> None:
+    if state.search_animation.active:
+        state.status = "Wait for search animation to finish."
+        return
+
     if len(state.path) < 2:
         state.status = "Run a planner before starting the robot."
         return
@@ -259,6 +329,48 @@ def _start_robot(state: AppState) -> None:
     state.robot.position = _cell_center(first_cell)
     state.robot.trail.append(state.robot.position)
     state.status = "Robot simulation running."
+
+
+def _update_search_animation(state: AppState, dt: float) -> None:
+    animation = state.search_animation
+    if not animation.active:
+        return
+
+    interval = 1.0 / config.SEARCH_ANIMATION_CELLS_PER_SECOND
+    animation.timer += dt
+
+    while animation.active and animation.timer >= interval:
+        animation.timer -= interval
+        _reveal_next_search_cell(state)
+
+
+def _reveal_next_search_cell(state: AppState) -> None:
+    animation = state.search_animation
+    if animation.index < len(animation.visited_order):
+        state.visited.add(animation.visited_order[animation.index])
+        animation.index += 1
+
+    if animation.index >= len(animation.visited_order):
+        _finish_search_animation(state)
+
+
+def _finish_search_animation(state: AppState) -> None:
+    animation = state.search_animation
+    final_path = list(animation.final_path)
+    final_visited = set(animation.final_visited)
+    map_obstacles = set(animation.map_obstacles)
+    map_start = animation.map_start
+    map_goal = animation.map_goal
+    animation.reset()
+
+    state.path = final_path
+    state.visited = final_visited
+    state.add_planner_history(map_obstacles, map_start, map_goal)
+
+    if state.stats.found:
+        state.status = f"{state.stats.name} found a path with {state.stats.path_length} steps."
+    else:
+        state.status = f"{state.stats.name}: no path found."
 
 
 def _update_robot(state: AppState, dt: float) -> None:
