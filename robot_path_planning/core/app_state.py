@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+from robot_path_planning.core.coordinates import WorldPosition
 from robot_path_planning.core.grid_map import Cell
 
 MapSignature = tuple[tuple[Cell, ...], Optional[Cell], Optional[Cell]]
@@ -50,17 +51,49 @@ class PlannerHistoryEntry:
 class RobotState:
     active: bool = False
     finished: bool = False
+    blocked: bool = False
     path_index: int = 0
     progress: float = 0.0
-    position: tuple[float, float] | None = None
-    trail: list[tuple[float, float]] = field(default_factory=list)
+    physics_accumulator: float = 0.0
+    position: WorldPosition | None = None
+    angle: float = 0.0
+    tracking_target_index: int = 0
+    tracking_target_distance: float = 0.0
+    segment_progress: float = 0.0
+    cross_track_error: float = 0.0
+    speed: float = 0.0
+    angular_velocity: float = 0.0
+    force: WorldPosition = (0.0, 0.0)
+    torque: float = 0.0
+    aligning_heading: bool = False
+    heading_error: float = 0.0
+    stuck_timer: float = 0.0
+    stuck_warnings: int = 0
+    last_target_distance: float | None = None
+    trail: list[WorldPosition] = field(default_factory=list)
 
     def reset(self) -> None:
         self.active = False
         self.finished = False
+        self.blocked = False
         self.path_index = 0
         self.progress = 0.0
+        self.physics_accumulator = 0.0
         self.position = None
+        self.angle = 0.0
+        self.tracking_target_index = 0
+        self.tracking_target_distance = 0.0
+        self.segment_progress = 0.0
+        self.cross_track_error = 0.0
+        self.speed = 0.0
+        self.angular_velocity = 0.0
+        self.force = (0.0, 0.0)
+        self.torque = 0.0
+        self.aligning_heading = False
+        self.heading_error = 0.0
+        self.stuck_timer = 0.0
+        self.stuck_warnings = 0
+        self.last_target_distance = None
         self.trail.clear()
 
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import math
+
 import pygame
 
 from robot_path_planning import config
 from robot_path_planning.core.app_state import AppState, ScreenMode
+from robot_path_planning.core.coordinates import cell_to_screen_rect, world_to_screen
 from robot_path_planning.core.grid_map import Cell, GridMap
 from robot_path_planning.ui.panel import SidePanel
 
@@ -36,13 +39,7 @@ class Renderer:
         pygame.draw.rect(self.screen, config.COLOR_GRID_BACKGROUND, rect)
 
     def _draw_cell(self, cell: Cell, color: tuple[int, int, int], inset: int = 1) -> None:
-        row, col = cell
-        rect = pygame.Rect(
-            col * config.CELL_SIZE + inset,
-            row * config.CELL_SIZE + inset,
-            config.CELL_SIZE - inset * 2,
-            config.CELL_SIZE - inset * 2,
-        )
+        rect = pygame.Rect(cell_to_screen_rect(cell, inset))
         pygame.draw.rect(self.screen, color, rect)
 
     def _draw_visited(self, visited: set[Cell], path: list[Cell]) -> None:
@@ -89,25 +86,20 @@ class Renderer:
             return
 
         if len(robot.trail) > 1:
-            points = [self._grid_position_to_pixel(position) for position in robot.trail]
+            points = [world_to_screen(position) for position in robot.trail]
             pygame.draw.lines(self.screen, config.COLOR_ROBOT_TRAIL, False, points, 3)
 
-        center = self._grid_position_to_pixel(robot.position)
+        center = world_to_screen(robot.position)
         radius = max(config.CELL_SIZE // 3, 8)
         pygame.draw.circle(self.screen, config.COLOR_ROBOT, center, radius)
         pygame.draw.circle(self.screen, (120, 53, 15), center, radius, width=2)
 
-        heading = self._robot_heading(state)
-        if heading is not None:
-            end = (
-                int(center[0] + heading[0] * radius * 1.4),
-                int(center[1] + heading[1] * radius * 1.4),
-            )
-            pygame.draw.line(self.screen, (120, 53, 15), center, end, 3)
-
-    def _grid_position_to_pixel(self, position: tuple[float, float]) -> tuple[int, int]:
-        row, col = position
-        return int(col * config.CELL_SIZE), int(row * config.CELL_SIZE)
+        heading = (math.cos(robot.angle), math.sin(robot.angle))
+        end = (
+            int(center[0] + heading[0] * radius * 1.4),
+            int(center[1] + heading[1] * radius * 1.4),
+        )
+        pygame.draw.line(self.screen, (120, 53, 15), center, end, 3)
 
     def _robot_heading(self, state: AppState) -> tuple[float, float] | None:
         robot = state.robot

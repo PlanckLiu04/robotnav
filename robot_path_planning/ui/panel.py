@@ -308,12 +308,34 @@ class SidePanel:
     def _draw_simulation(self, screen: pygame.Surface, state: AppState) -> None:
         top = 518
         self._draw_section_header(screen, "Simulation", top, width=self.width - self.margin * 2)
-        status = "running" if state.robot.active else "finished" if state.robot.finished else "idle"
-        self._draw_lines(screen, [f"Robot: {status}"], self.x + self.margin, top + 36, max_lines=1, width=self.width - self.margin * 2)
-        self._draw_message(screen, state.status, self.x + self.margin, top + 58, self.width - self.margin * 2, max_lines=2)
+        status = (
+            "aligning"
+            if state.robot.aligning_heading
+            else "running"
+            if state.robot.active
+            else "blocked"
+            if state.robot.blocked
+            else "finished"
+            if state.robot.finished
+            else "idle"
+        )
+        force_mag = (state.robot.force[0] * state.robot.force[0] + state.robot.force[1] * state.robot.force[1]) ** 0.5
+        lines = [
+            f"Robot: {status}  Speed: {state.robot.speed:.2f}",
+            f"Target: {state.robot.tracking_target_index}  Dist: {state.robot.tracking_target_distance:.2f}",
+            f"Seg: {state.robot.segment_progress:.2f}  XErr: {state.robot.cross_track_error:.2f}",
+            f"Force: {force_mag:.1f}  Torque: {state.robot.torque:.1f}",
+            f"HeadErr: {state.robot.heading_error:.2f}  Align: {state.robot.aligning_heading}",
+            f"Mass: {config.ROBOT_MASS:.1f}  R: {config.ROBOT_RADIUS_CELLS:.2f}",
+            f"Drive: {config.ROBOT_DRIVE_FORCE:.0f}  Damp: {config.ROBOT_DAMPING_FORCE:.0f}",
+            f"PID: {config.ROBOT_HEADING_PID_KP:.1f}/{config.ROBOT_HEADING_PID_KD:.1f}  MaxT: {config.ROBOT_MAX_TORQUE:.0f}",
+            f"MaxV: {config.ROBOT_MAX_SPEED_CELLS_PER_SECOND:.1f}  Stuck: {state.robot.stuck_warnings}",
+        ]
+        self._draw_lines(screen, lines, self.x + self.margin, top + 36, max_lines=8, width=self.width - self.margin * 2)
+        self._draw_message(screen, state.status, self.x + self.margin, top + 180, self.width - self.margin * 2, max_lines=2)
 
     def _draw_history(self, screen: pygame.Surface, state: AppState) -> None:
-        top = 626
+        top = 782
         self._draw_section_header(screen, "Recent Runs", top, width=self.width - self.margin * 2)
         if not state.planner_history:
             self._draw_lines(screen, ["No planner runs yet."], self.x + self.margin, top + 38, max_lines=1, width=self.width - self.margin * 2)

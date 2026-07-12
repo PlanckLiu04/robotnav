@@ -61,9 +61,37 @@
 - Expanded the planner selector and `Tab` shortcut cycle to include BFS, A*, DFS, Dijkstra, and Greedy.
 - Verified the planner implementations with compile checks and a planner smoke test.
 
+## Week 4 - 2026-07-12
+
+- Added `pymunk` as the 2D rigid-body physics engine dependency.
+- Added `core/coordinates.py` for grid cell, continuous world position, and screen pixel conversion.
+- Added `physics/physics_world.py` with a Pymunk `Space`, dynamic circular robot body, and static square obstacle bodies.
+- Replaced basic interpolated robot animation with continuous physics-based robot simulation.
+- Added fixed physics timestep integration with a bounded accumulator for more stable simulation.
+- Added robot physical parameters including mass, radius, force limits, speed limits, and collision shapes.
+- Added `control/pid.py` with reusable `PIDConfig` and `PIDController`.
+- Added PID heading control that converts heading error into torque.
+- Added `control/path_tracker.py` to convert discrete planner paths into continuous waypoint / segment tracking targets.
+- Added path compression so the robot tracks endpoints and turning cells instead of every cell center.
+- Added segment-constrained lookahead tracking to reduce direct diagonal pulls across turns.
+- Added cross-track error diagnostics and cross-track correction force.
+- Added segment recapture logic when the robot is pushed far from the current path segment.
+- Added force damping, maximum force limiting, maximum speed limiting, heading gate, and arrival slowdown.
+- Added soft path clearance warnings instead of hard obstacle inflation, preserving one-cell corridor feasibility.
+- Added startup heading alignment so the robot turns in place before applying forward force.
+- Added `blocked` detection for low-speed, no-progress, high-force states, and stopped hard-pushing after physical blockage.
+- Added `PhysicsWorld.stop_robot()` and `stop_robot_translation()` helpers for blocked and alignment states.
+- Fixed a critical force-coordinate bug by applying controller force with `apply_force_at_world_point()` instead of local-space force application.
+- Expanded the Simulation panel with speed, target, distance, segment progress, cross-track error, force, torque, heading error, alignment state, physical parameters, PID values, max torque, max velocity, and stuck diagnostics.
+- Updated development notes with detailed records for stages 6-A through 6-J, including stuck debugging, PID limitations, and force coordinate-system lessons.
+- Added Week 4 QA documentation explaining Pymunk, PathTracker, PID, stuck iterations, world-space force vs local force, and Simulation panel variables.
+- Verified Week 4 with compile checks and focused straight, vertical, turning, and one-cell corridor smoke tests.
+
 ## Upcoming
 
-- Compare the five planners more systematically on the same map.
-- Optionally add a separate guaranteed-solvable random map generator while keeping ordinary random maps.
-- Improve robot rendering with heading triangle.
-- Add PID heading controller.
+- Improve corner approach behavior with turn-aware slowdown.
+- Split motion control into tangent-speed control and normal cross-track correction.
+- Add narrow-corridor speed protection based on clearance and cross-track error.
+- Add blocked recovery tools such as Reset Robot, Pause / Resume, or local recovery.
+- Visualize current segment, projected point, and lookahead target for easier debugging.
+- Save representative stuck cases as repeatable regression scenarios.
